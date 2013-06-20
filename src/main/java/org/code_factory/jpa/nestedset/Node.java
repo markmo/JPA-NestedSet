@@ -139,4 +139,6 @@ public interface Node<T extends NodeInfo> extends NodeInfo {
      * @return TRUE if this node is a descendant of the given node, FALSE otherwise.
      */
     boolean isDescendantOf(Node<T> other);
+
+    void moveToRoot();
 }

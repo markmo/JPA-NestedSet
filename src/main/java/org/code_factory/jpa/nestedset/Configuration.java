@@ -20,7 +20,8 @@ class Configuration {
     private String levelFieldName;
     private String rootIdFieldName;
     private String entityName;
-    
+    private Class nodeType;
+
     private boolean hasManyRoots = false;
 
     /**
@@ -96,4 +97,12 @@ class Configuration {
 	public void setEntityName(String tableName) {
 		this.entityName = tableName;
 	}
+
+    Class getNodeType() {
+        return nodeType;
+    }
+
+    void setNodeType(Class nodeType) {
+        this.nodeType = nodeType;
+    }
 }

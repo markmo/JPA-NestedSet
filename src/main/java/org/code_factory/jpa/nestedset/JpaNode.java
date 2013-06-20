@@ -142,9 +142,10 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
     */
 
     /* public */ private CriteriaQuery<T> getBaseQuery() {
+        Configuration c = nsm.getConfig(this.type);
         if (this.baseQuery == null) {
-            this.baseQuery = nsm.getEntityManager().getCriteriaBuilder().createQuery(type);
-            this.queryRoot = this.baseQuery.from(type);
+            this.baseQuery = nsm.getEntityManager().getCriteriaBuilder().createQuery(c.getNodeType());
+            this.queryRoot = this.baseQuery.from(c.getNodeType());
         }
         return this.baseQuery;
     }
@@ -210,20 +211,34 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
             return this.parent;
         }
 
-        CriteriaBuilder cb = nsm.getEntityManager().getCriteriaBuilder();
-        CriteriaQuery<T> cq = getBaseQuery();
-        cq.where(cb.lt(
-                    queryRoot.get(nsm.getConfig(this.type).getLeftFieldName()).as(Number.class),
-                    getLeftValue()
-                    ),
-                cb.gt(
-                    queryRoot.get(nsm.getConfig(this.type).getRightFieldName()).as(Number.class),
-                    getRightValue()
-                    ));
-        cq.orderBy(cb.asc(queryRoot.get(nsm.getConfig(this.type).getRightFieldName())));
-        nsm.applyRootId(this.type, cq, getRootValue());
+//        CriteriaBuilder cb = nsm.getEntityManager().getCriteriaBuilder();
+//        CriteriaQuery<T> cq = getBaseQuery();
+//        cq.where(cb.lt(
+//                    queryRoot.get(nsm.getConfig(this.type).getLeftFieldName()).as(Number.class),
+//                    getLeftValue()
+//                    ),
+//                cb.gt(
+//                    queryRoot.get(nsm.getConfig(this.type).getRightFieldName()).as(Number.class),
+//                    getRightValue()
+//                    ));
+//        cq.orderBy(cb.asc(queryRoot.get(nsm.getConfig(this.type).getRightFieldName())));
+//        nsm.applyRootId(this.type, cq, getRootValue());
+//
+//        List<T> result = nsm.getEntityManager().createQuery(cq).getResultList();
 
-        List<T> result = nsm.getEntityManager().createQuery(cq).getResultList();
+        // the above is causing a QuerySyntaxException with the cast
+        // of the lft and rgt fields to java.lang.Number
+        Configuration c = nsm.getConfig(this.type);
+        String q = String.format(
+                "select x from %s x where x.%s < %s and x.%s > %s",
+                c.getEntityName(), c.getLeftFieldName(), getLeftValue(),
+                c.getRightFieldName(), getRightValue());
+        if (c.getRootIdFieldName() != null) {
+            q += String.format(" and x.%s = %s", c.getRootIdFieldName(), getRootValue());
+        }
+        q += String.format(" order by %s asc", c.getRightFieldName());
+        @SuppressWarnings("unchecked")
+        List<T> result = nsm.getEntityManager().createQuery(q, c.getNodeType()).getResultList();
 
         this.parent = nsm.getNode(result.get(0));
 
@@ -374,6 +389,22 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
         nsm.getEntityManager().persist(this.node);
     }
 
+    private void insertRelativeTo(Node<T> dest, int newLeft) {
+        if (dest == this.node) {
+            throw new IllegalArgumentException("Cannot add node as child of itself.");
+        }
+
+        int newRight = dest.getRightValue() + 1;
+        int newRoot = dest.getRootValue();
+
+        shiftRLValues(newLeft, 0, 2, newRoot);
+        setLevel(dest.getLevel() + 1);
+        setLeftValue(newLeft);
+        setRightValue(newRight);
+        setRootValue(newRoot);
+        nsm.getEntityManager().persist(this.node);
+    }
+
     /**
      * Inserts this node as the first child of the given node.
      *
@@ -445,13 +476,13 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
      * @param delta The offset by which to shift the left/right values (can be negative).
      * @param rootId The root/tree ID of the nodes to shift.
      */
-    private void shiftRLValues(int first, int last, int delta, int rootId) {
+    void shiftRLValues(int first, int last, int delta, int rootId) {
     	Configuration cfg = nsm.getConfig(this.type);
         String rootIdFieldName = cfg.getRootIdFieldName();
         String leftFieldName = cfg.getLeftFieldName();
         String rightFieldName = cfg.getRightFieldName();
         String entityName =  cfg.getEntityName();
-        
+
         // Shift left values
         StringBuilder sbLeft = new StringBuilder();
         sbLeft.append("update ").append(entityName).append(" n")
@@ -631,7 +662,7 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
     /**
      * move node's and its children to location 'destLeft' and update rest of tree.
      *
-     * @param int destLeft destination left value
+     * @param destLeft destination left value
      * @param levelDiff
      */
     private void updateNode(int destLeft, int levelDiff) {
@@ -761,6 +792,23 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
         int oldLft = getLeftValue();
         int oldRgt = getRightValue();
         int oldLevel = getLevel();
+        int newLeft = 0;
+        switch (moveType) {
+            case PREV_SIBLING:
+                newLeft = dest.getLeftValue();
+                break;
+            case FIRST_CHILD:
+                newLeft = dest.getLeftValue() + 1;
+                break;
+            case NEXT_SIBLING:
+                newLeft = dest.getRightValue() + 1;
+                break;
+            case LAST_CHILD:
+                newLeft = dest.getRightValue();
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown move operation: " + moveType);
+        }
 
         // Prepare target tree for insertion, make room
         shiftRLValues(newLeftValue, 0, oldRgt - oldLft - 1, newRoot);
@@ -772,22 +820,23 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
         setRightValue(0);
         setLeftValue(0);
 
-        switch (moveType) {
-            case PREV_SIBLING:
-                insertAsPrevSiblingOf(dest);
-                break;
-            case FIRST_CHILD:
-                insertAsFirstChildOf(dest);
-                break;
-            case NEXT_SIBLING:
-                insertAsNextSiblingOf(dest);
-                break;
-            case LAST_CHILD:
-                insertAsLastChildOf(dest);
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown move operation: " + moveType);
-        }
+//        switch (moveType) {
+//            case PREV_SIBLING:
+//                insertAsPrevSiblingOf(dest);
+//                break;
+//            case FIRST_CHILD:
+//                insertAsFirstChildOf(dest);
+//                break;
+//            case NEXT_SIBLING:
+//                insertAsNextSiblingOf(dest);
+//                break;
+//            case LAST_CHILD:
+//                insertAsLastChildOf(dest);
+//                break;
+//            default:
+//                throw new IllegalArgumentException("Unknown move operation: " + moveType);
+//        }
+        insertRelativeTo(dest, newLeft);
 
         //int diff = oldRgt - oldLft;
         setRightValue(getLeftValue() + (oldRgt - oldLft));
@@ -842,7 +891,7 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
         String levelFieldName = cfg.getLevelFieldName();
         String rootIdFieldName = cfg.getRootIdFieldName();
         String entityName =  cfg.getEntityName();
-        
+
         int oldRgt = getRightValue();
         int oldLft = getLeftValue();
         int oldRoot = getRootValue();
@@ -858,7 +907,7 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
                 .append(", n.").append(rightFieldName).append(" = n.").append(rightFieldName).append(" + ?2")
                 .append(", n.").append(levelFieldName).append(" = n.").append(levelFieldName).append(" - ?3")
                 .append(", n.").append(rootIdFieldName).append(" = ?4")
-                .append("where n.").append(leftFieldName).append(" > ?5")
+                .append(" where n.").append(leftFieldName).append(" > ?5")
                 .append(" and n.").append(rightFieldName).append(" < ?6")
                 .append(" and n.").append(rootIdFieldName).append(" = ?7");
 
@@ -883,6 +932,12 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
         setRightValue(oldRgt - oldLft + 1);
         setRootValue(newRootId);
         setLevel(0);
+    }
+
+    public void moveToRoot() {
+        Configuration c = nsm.getConfig(this.type);
+        int newRootId = nsm.getNextRootValue(c.getNodeType());
+        makeRoot(newRootId);
     }
 
     //
@@ -920,5 +975,5 @@ class JpaNode<T extends NodeInfo> implements Node<T> {
     void internalSetAncestors(List<Node<T>> ancestors) {
         this.ancestors = ancestors;
     }
-    
+
 }

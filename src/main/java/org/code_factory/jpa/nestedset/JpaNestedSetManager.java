@@ -27,10 +27,7 @@ import javax.persistence.criteria.CriteriaQuery;
 import javax.persistence.criteria.Predicate;
 import javax.persistence.criteria.Root;
 import net.jcip.annotations.NotThreadSafe;
-import org.code_factory.jpa.nestedset.annotations.LeftColumn;
-import org.code_factory.jpa.nestedset.annotations.LevelColumn;
-import org.code_factory.jpa.nestedset.annotations.RightColumn;
-import org.code_factory.jpa.nestedset.annotations.RootColumn;
+import org.code_factory.jpa.nestedset.annotations.*;
 
 /**
  * @author Roman Borschel <roman@code-factory.org>
@@ -181,7 +178,7 @@ public class JpaNestedSetManager implements NestedSetManager {
         em.persist(root);
         return getNode(root);
     }
-    
+
     /**
      * {@inheritDoc}
      */
@@ -203,20 +200,38 @@ public class JpaNestedSetManager implements NestedSetManager {
         return node;
     }
 
+    public <T extends NodeInfo> int getNextRootValue(Class<T> clazz) {
+        Configuration config = getConfig(clazz);
+//        CriteriaBuilder cb = em.getCriteriaBuilder();
+//        CriteriaQuery<Number> cq = cb.createQuery(Number.class);
+//        Root<T> queryRoot = cq.from(clazz);
+//        cq.select(cb.max(queryRoot.get(config.getRootIdFieldName()).as(Number.class)));
+//        return em.createQuery(cq).getSingleResult().intValue();
+
+        String q = String.format(
+                "select max(s.%s) from %s s",
+                config.getRootIdFieldName(), config.getEntityName()
+        );
+        return em.createQuery(q, Number.class).getSingleResult().intValue() + 1;
+    }
+
     /**
      * INTERNAL:
      * Gets the nestedset configuration for the given class.
      *
-     * @param clazz
+     * @param clz
      * @return The configuration.
      */
-    Configuration getConfig(Class<?> clazz) {
+    Configuration getConfig(Class<?> clz) {
+        NodeClass nodeClass = clz.getAnnotation(NodeClass.class);
+        Class<?> clazz = (nodeClass == null) ? clz : nodeClass.type();
         if (!this.configs.containsKey(clazz)) {
             Configuration config = new Configuration();
-            
+
             Entity entity = clazz.getAnnotation(Entity.class);
         	String name = entity.name();
         	config.setEntityName( (name != null && name.length()>0) ? name : clazz.getSimpleName());
+            config.setNodeType(clazz);
 
             for (Field field : clazz.getDeclaredFields()) {
                 if (field.getAnnotation(LeftColumn.class) != null) {
@@ -238,7 +253,7 @@ public class JpaNestedSetManager implements NestedSetManager {
 
         return this.configs.get(clazz);
     }
-    
+
     int getMaximumRight(Class<? extends NodeInfo> clazz) {
     	Configuration config = getConfig(clazz);
     	CriteriaBuilder cb = em.getCriteriaBuilder();

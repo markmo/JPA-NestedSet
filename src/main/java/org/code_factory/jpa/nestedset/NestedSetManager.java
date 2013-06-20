@@ -99,4 +99,6 @@ public interface NestedSetManager {
      * @return The collection of nodes.
      */
     Collection<Node<?>> getNodes();
+
+    <T extends NodeInfo> int getNextRootValue(Class<T> clazz);
 }
